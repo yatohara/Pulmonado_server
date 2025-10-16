@@ -1,16 +1,49 @@
-# This is a sample Python script.
+from flask import Flask, request, jsonify
+import sqlite3
+from database import criar_tabelas
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
-
-
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+app = Flask(__name__)
+criar_tabelas()
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
+# ----------------- ROTA PARA O ESP -----------------
+@app.route("/api/dados", methods=["POST"])
+def receber_dados():
+    try:
+        data = request.get_json()
+        fluxo = data.get("fluxo", [])
+        paciente_id = data.get("paciente_id")
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+        conn = sqlite3.connect("pulmonado.db")
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO exames (paciente_id, dados) VALUES (?, ?)",
+            (paciente_id, str(fluxo))
+        )
+        conn.commit()
+        conn.close()
+
+        return jsonify({"status": "ok", "msg": f"{len(fluxo)} leituras recebidas"})
+    except Exception as e:
+        return jsonify({"status": "erro", "msg": str(e)}), 400
+
+
+# ----------------- ROTA PARA O STREAMLIT -----------------
+@app.route("/api/exames/<int:paciente_id>", methods=["GET"])
+def listar_exames(paciente_id):
+    conn = sqlite3.connect("pulmonado.db")
+    cur = conn.cursor()
+    cur.execute("SELECT id, paciente_id, dados, data FROM exames WHERE paciente_id=?", (paciente_id,))
+    exames = cur.fetchall()
+    conn.close()
+
+    exames_formatados = [
+        {"id": e[0], "paciente_id": e[1], "dados": e[2], "data": e[3]}
+        for e in exames
+    ]
+
+    return jsonify(exames_formatados)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
