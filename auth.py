@@ -2,7 +2,7 @@ from database import get_db_connection
 import sqlite3
 
 
-def register_patient(name, email, password): # Mudança na ordem dos parâmetros
+def register_patient(name, email, password):
     """
     Registers a new patient in the database.
     Returns the patient ID on success, or None if the email already exists or on error.

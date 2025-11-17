@@ -1,15 +1,16 @@
 from flask import Flask, request, jsonify
-from database import start_new_exam, save_flow_readings
-
+from database import start_new_exam, save_flow_readings, update_exam_metrics
+from auxiliar_functions import calculate_spirometry_metrics
 
 app = Flask(__name__)
 
 # Global state variable to store the ongoing exam data
 # Structure: {'patient_id_str': {'exam_id': int, 'load': float, 'status': str, 'blocks_received': int}}
 SESSION_STATE = {}
+LAST_LOGGED_PATIENT_ID = 0
 
 
-@app.route('/api/start_session', methods=['POST'])  # Renamed endpoint
+@app.route('/api/start_session', methods=['POST'])
 def start_session():
     """Endpoint for Streamlit to initiate an exam session."""
     data = request.get_json()
@@ -30,8 +31,9 @@ def start_session():
     SESSION_STATE[patient_id_str] = {
         'exam_id': exam_id,
         'load': load,
-        'status': 'INICIAR',  # Command for ESP32
-        'blocks_received': 0
+        'status': 'TRIGGER_PENDENTE',  # Command for ESP32
+        'blocks_received': 0,
+        'patient_id': patient_id
     }
 
     # DEBUG: Print the updated state
@@ -81,6 +83,21 @@ def check_progress(patient_id):
     }), 200
 
 
+@app.route('/api/set_status/<int:patient_id>/<string:new_status>', methods=['POST'])
+def set_status(patient_id, new_status):
+    """Endpoint para o ESP32 mudar o status da sessão (ex: TRIGGER_PENDENTE -> INICIAR)."""
+    patient_id_str = str(patient_id)
+
+    if patient_id_str in SESSION_STATE:
+        if new_status == 'INICIAR' or new_status == 'FINALIZADO':
+            SESSION_STATE[patient_id_str]['status'] = new_status
+            return jsonify({"message": f"Status atualizado para {new_status}"}), 200
+        else:
+            return jsonify({"error": "Status inválido"}), 400
+
+    return jsonify({"error": "Nenhuma sessão ativa"}), 404
+
+
 @app.route('/api/esp_sync/<int:patient_id>', methods=['GET'])
 def esp_sync(patient_id):
     """Endpoint for ESP32 to FETCH the status and load."""
@@ -96,22 +113,47 @@ def esp_sync(patient_id):
     return jsonify(state), 200
 
 
-@app.route('/api/finalize_session', methods=['POST'])  # Renamed endpoint
+@app.route('/api/finalize_session', methods=['POST'])
 def finalize_session():
     """Endpoint for ESP32 or Streamlit to signal the end of the session."""
     data = request.get_json()
     patient_id = data.get('patient_id')
 
     if str(patient_id) in SESSION_STATE:
-        # Signals the end for Streamlit/ESP32
+        exam_id = SESSION_STATE[str(patient_id)]['exam_id']
+
+        # Sinaliza o fim para Streamlit/ESP32
         SESSION_STATE[str(patient_id)]['status'] = 'FINALIZADO'
 
-        # NOTE: We keep the entry for a short time for Streamlit's final GET check.
-        # It's better to let a separate cleanup process (or app restart) clear this.
+        # CALCULA E SALVA AS MÉTRICAS
+        metrics = calculate_spirometry_metrics(exam_id)
+        if metrics:
+            update_exam_metrics(exam_id, metrics)
+            print(f"DEBUG: Métricas calculadas para Exame {exam_id}: {metrics}")
+        else:
+            print(f"DEBUG: Falha ao calcular métricas para Exame {exam_id}")
 
         return jsonify({"message": "Session marked as FINALIZED"}), 200
 
     return jsonify({"error": "No active session found"}), 404
+
+
+# Salva o ID do paciente
+@app.route('/api/set_patient_id/<int:patient_id>', methods=['POST'])
+def set_patient_id(patient_id):
+    """Endpoint chamado pelo Streamlit no login para registrar o Patient ID."""
+    global LAST_LOGGED_PATIENT_ID
+    LAST_LOGGED_PATIENT_ID = patient_id
+    print(f"DEBUG: LAST_LOGGED_PATIENT_ID set to {patient_id}")
+    return jsonify({"message": "Patient ID set"}), 200
+
+
+# Busca o ID do paciente logado (usado pelo ESP32)
+@app.route('/api/get_last_patient_id', methods=['GET'])
+def get_last_patient_id():
+    """Endpoint chamado pelo ESP32 para obter o ID do paciente atual."""
+    # Retorna o último ID que o Streamlit enviou.
+    return jsonify({"patient_id": LAST_LOGGED_PATIENT_ID}), 200
 
 
 if __name__ == '__main__':

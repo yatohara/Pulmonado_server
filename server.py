@@ -3,8 +3,10 @@ import time
 import requests
 import pandas as pd
 import plotly.express as px
-from database import create_tables, get_readings_by_exam
+from database import create_tables, get_readings_by_exam, get_exam_metrics, get_all_patient_exams_metrics
 from auth import register_patient, login_patient
+from auxiliar_functions import display_dashboard
+
 
 # Criar tabelas e garantir que o DB exista
 create_tables()
@@ -15,8 +17,6 @@ st.set_page_config(page_title="Pulmonado", page_icon="💨", layout="wide")
 # Gerenciamento de estado da sessão
 if "patient_info" not in st.session_state:
     st.session_state.patient_info = None
-if "last_blocks_received" not in st.session_state:
-    st.session_state.last_blocks_received = 0
 if "current_exam_id" not in st.session_state:
     st.session_state.current_exam_id = None
 
@@ -37,24 +37,24 @@ if st.session_state.patient_info:
 
         modes = ['Manual', 'Automático']
         selected_mode = st.selectbox("Modo do Pulmonado", modes)
-        load = 0.0  # Inicializa a carga
+        load = 0.0
 
         match selected_mode:
 
             case "Manual":
-                load = st.number_input(label="Carga do equipamento", min_value=-0.0, step=0.1, max_value=40.0)
+                load = st.number_input(label="Carga do equipamento (L/min)", min_value=-0, step=1, max_value=100)
 
             case "Automático":
-                default_load = 5.0
-                load = st.number_input(label="Carga do equipamento", min_value=-0.0,
-                                       step=0.1,
-                                       max_value=40.0,
+                default_load = 30
+                load = st.number_input(label="Carga do equipamento (L/min)", min_value=-0,
+                                       step=1,
+                                       max_value=100,
                                        value=default_load
                                        )
 
         # Parâmetros de monitoramento
         CHECKS_PER_SECOND = 5
-        MAX_DURATION_SECONDS = 15  # Limite de tempo máximo de espera
+        MAX_DURATION_SECONDS = 3  # Limite de tempo máximo de espera
 
         if st.button("Iniciar Fisioterapia"):
 
@@ -64,7 +64,6 @@ if st.session_state.patient_info:
                 "load": load
             }
 
-            st.session_state.last_blocks_received = 0
             st.session_state.exam_readings = pd.DataFrame()
 
             try:
@@ -76,40 +75,49 @@ if st.session_state.patient_info:
                 st.session_state.current_exam_id = exam_id
 
                 st.info(
-                    f"Sessão iniciada (Exame ID: {exam_id}). Aguardando confirmação de {MAX_DURATION_SECONDS}s "
+                    f"Sessão iniciada. Aguardando confirmação de {MAX_DURATION_SECONDS}s "
                     f"do ESP32...")
 
                 progresso = st.progress(0)
                 status_container = st.container()
                 progresso_text = status_container.empty()
                 block_messages = status_container.empty()
+                MAX_WAIT_TIME_FOR_TRIGGER = 30
                 start_time = time.time()
 
                 # 2. Loop de monitoramento que espera o status "FINALIZADO"
                 is_running = True
-                while is_running and (time.time() - start_time) < MAX_DURATION_SECONDS:
+                is_measurement_active = False
+                while is_running and (time.time() - start_time) < MAX_WAIT_TIME_FOR_TRIGGER:
 
                     # 2.1. Check progress (GET request)
                     progress_response = requests.get(f"{FLASK_BASE_URL}/api/check_progress/{patient_id}")
                     progress_response.raise_for_status()
 
                     progress_data = progress_response.json()
-                    current_blocks = progress_data.get('blocks_received', 0)
                     current_status = progress_data.get('status', 'AGUARDANDO')
 
                     # Atualiza a barra de progresso (baseado no tempo)
                     elapsed_time = time.time() - start_time
-                    progresso_percent = min(int(elapsed_time / MAX_DURATION_SECONDS * 100), 100)
-                    progresso.progress(progresso_percent)
-                    progresso_text.text(f"Exame em andamento. Tempo: {int(elapsed_time)}s. Status: {current_status}")
 
-                    # Verifica se novos blocos chegaram
-                    new_blocks = current_blocks - st.session_state.last_blocks_received
+                    if current_status == "INICIAR" and not is_measurement_active:
+                        is_measurement_active = True
+                        measurement_start_time = time.time()
 
-                    if new_blocks > 0:
-                        latest_message = f"Bloco(s) de dados recebido(s)! Total: **{current_blocks}** blocos"
-                        block_messages.markdown(latest_message)
-                        st.session_state.last_blocks_received = current_blocks  # Atualiza o estado
+                    elif current_status == "INICIAR" and is_measurement_active:
+                        # Medição em andamento
+                        measurement_time = time.time() - measurement_start_time
+
+                        progresso_percent = min(int(measurement_time / MAX_DURATION_SECONDS * 100), 100)
+
+                        progresso.progress(progresso_percent)
+                        progresso_text.text(
+                            f"EXAME ATIVO. Medição: {int(measurement_time)}s de {MAX_DURATION_SECONDS}s.")
+
+                    elif current_status == "TRIGGER_PENDENTE":
+                        progresso_text.text(
+                            f"Aguardando expiração"
+                        )
 
                     # CONDIÇÃO DE SAÍDA: O ESP32 terminou e o Flask confirmou
                     if current_status == "FINALIZADO":
@@ -124,7 +132,7 @@ if st.session_state.patient_info:
                                                   json={"patient_id": patient_id})
                 finalize_response.raise_for_status()
 
-                progresso_text.text(f"Exame em andamento. Tempo: {int(elapsed_time + 1)}s. Status: {current_status}")
+                progresso_text.text(f"Exame em andamento. Tempo: {int(measurement_time)}s. Status: {current_status}")
                 progresso.progress(100)
 
                 # 4. Busca os dados finais e processa para o gráfico
@@ -141,7 +149,7 @@ if st.session_state.patient_info:
                         # Calcula a coluna de segundos decorridos
                         df['Seconds'] = (df['timestamp'] - df['timestamp'].iloc[0]).dt.total_seconds().round(2)
 
-                        # PROCESSAMENTO CRÍTICO: Aplica a Média Móvel de 5 períodos
+                        # PROCESSAMENTO CRÍTICO: Aplica a Média Móvel de 2 períodos
                         # Cria a coluna suavizada
                         df['Flow (Smoothed)'] = df['Flow'].rolling(window=5, center=False).mean()
 
@@ -150,13 +158,11 @@ if st.session_state.patient_info:
 
                         st.session_state.exam_readings = df
 
-                st.success(f"Sessão concluída! Total de blocos recebidos: {st.session_state.last_blocks_received}")
-
             except requests.exceptions.RequestException as e:
                 st.error(f"Erro ao comunicar com o servidor Flask ou iniciar sessão: {e}")
                 st.error("Verifique se o `api.py` está rodando e acessível em 127.0.0.1:5000.")
 
-            # 5. Exibe os dois gráficos se houver dados
+            # 5. Exibe o gráficos
             if not st.session_state.exam_readings.empty:
                 plot_df = st.session_state.exam_readings.copy()
                 plot_df = plot_df.dropna(subset=['Flow (Smoothed)', 'Seconds'])
@@ -194,16 +200,30 @@ if st.session_state.patient_info:
             else:
                 st.warning("Nenhum dado de leitura recebido ou salvo para esta sessão.")
 
+            # 6. Exibe os dados do exame
+            metrics_list = get_exam_metrics(st.session_state.current_exam_id)
+
+            if metrics_list:
+                # Converte a lista de tuplas em um dicionário para fácil acesso
+                metrics_keys = ['CV (L)', 'CVF (L)', 'VEF1 (L)', 'VEF1/CVF (%)', 'PEF (L/s)', 'FEF25-75% (L/s)']
+                metrics_dict = dict(zip(metrics_keys, metrics_list))
+
+                st.markdown("---")
+                st.subheader("📋 Resultados da Espirometria")
+
+                # Exibir em colunas para organização
+                col1, col2, col3 = st.columns(3)
+
+                col1.metric("Capacidade Vital (CV)", f"{metrics_dict['CV (L)']:.3f} L")
+                col1.metric("CV Forçada (CVF)", f"{metrics_dict['CVF (L)']:.3f} L")
+                col2.metric("VEF1 (1º Segundo)", f"{metrics_dict['VEF1 (L)']:.3f} L")
+                col2.metric("Relação VEF1/CVF", f"{metrics_dict['VEF1/CVF (%)']:.1f} %")
+                col3.metric("Pico de Fluxo (PEF)", f"{metrics_dict['PEF (L/s)']:.3f} L/s")
+                col3.metric("Fluxo Médio (FEF 25-75%)", f"{metrics_dict['FEF25-75% (L/s)']:.3f} L/s")
+
     with tab_dashboard:
 
-        st.sidebar.header("Filtros 📅")
-        st.sidebar.date_input("Selecione a data", format="DD/MM/YYYY")
-        st.sidebar.button("Filtrar")
-
-        # Dashboard
-        st.title(f"📊 Dashboard de {patient_name}")
-        st.info("Aqui futuramente você verá seus exames e gráficos de desempenho pulmonar.")
-        st.sidebar.success(f"Paciente: {patient_name} (ID: {patient_id})")
+        display_dashboard(patient_id)
 
     if st.sidebar.button("Sair"):
         st.session_state.patient_info = None
@@ -224,6 +244,12 @@ else:
             patient_info = login_patient(email, password)
             if patient_info:
                 st.session_state.patient_info = patient_info
+
+                try:
+                    requests.post(f"{FLASK_BASE_URL}/api/set_patient_id/{patient_info['id']}")
+                except Exception as e:
+                    st.warning(f"Não foi possível notificar o Flask sobre o login: {e}")
+
                 st.rerun()
             else:
                 st.error("Email ou senha incorretos.")
