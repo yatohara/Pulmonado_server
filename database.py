@@ -86,10 +86,11 @@ def save_flow_readings(exam_id, flow_readings):
     data_to_insert = []
     start_timestamp = datetime.now()
     milliseconds_interval = 10  # 10ms interval simulated from ESP32
+    readings_amount = len(flow_readings)
 
     # Generates a timestamp for each reading using the interval
     for i, flow in enumerate(flow_readings):
-        timestamp = (start_timestamp + timedelta(milliseconds=i * milliseconds_interval)).isoformat()
+        timestamp = (start_timestamp - timedelta(milliseconds=(readings_amount - i) * milliseconds_interval)).isoformat()
         data_to_insert.append((exam_id, timestamp, flow))
 
     try:

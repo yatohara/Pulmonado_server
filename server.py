@@ -19,7 +19,6 @@ if "patient_info" not in st.session_state:
     st.session_state.patient_info = None
 if "current_exam_id" not in st.session_state:
     st.session_state.current_exam_id = None
-
 if "exam_readings" not in st.session_state:
     # DataFrame vazio para armazenar os dados do gráfico
     st.session_state.exam_readings = pd.DataFrame()
@@ -35,28 +34,29 @@ if st.session_state.patient_info:
     with tab_exam:
         st.header("⚙️Ajuste dos parâmetros")
 
-        modes = ['Manual', 'Automático']
+        modes = ['Fisioterapia', 'Espirometria']
         selected_mode = st.selectbox("Modo do Pulmonado", modes)
-        load = 0.0
+        load = 0
 
         match selected_mode:
 
-            case "Manual":
+            case "Fisioterapia":
                 load = st.number_input(label="Carga do equipamento (L/min)", min_value=-0, step=1, max_value=100)
 
-            case "Automático":
-                default_load = 30
+            case "Espirometria":
+                default_load = 0
                 load = st.number_input(label="Carga do equipamento (L/min)", min_value=-0,
                                        step=1,
                                        max_value=100,
-                                       value=default_load
+                                       value=default_load,
+                                       disabled=True
                                        )
 
         # Parâmetros de monitoramento
         CHECKS_PER_SECOND = 5
         MAX_DURATION_SECONDS = 3  # Limite de tempo máximo de espera
 
-        if st.button("Iniciar Fisioterapia"):
+        if st.button("Iniciar Exame"):
 
             # 1. Enviar a carga para o Flask iniciar a sessão
             payload = {
@@ -149,7 +149,7 @@ if st.session_state.patient_info:
                         # Calcula a coluna de segundos decorridos
                         df['Seconds'] = (df['timestamp'] - df['timestamp'].iloc[0]).dt.total_seconds().round(2)
 
-                        # PROCESSAMENTO CRÍTICO: Aplica a Média Móvel de 2 períodos
+                        # PROCESSAMENTO CRÍTICO: Aplica a Média Móvel de 5 períodos
                         # Cria a coluna suavizada
                         df['Flow (Smoothed)'] = df['Flow'].rolling(window=5, center=False).mean()
 
@@ -263,7 +263,7 @@ else:
             if name and email and password:
                 patient_id = register_patient(name, email, password)
                 if patient_id:
-                    st.success(f"Conta criada com sucesso! Seu ID é {patient_id}. Faça login para começar.")
+                    st.success(f"Conta criada com sucesso! Faça o Login para iniciar")
                 else:
                     st.error("Esse email já está cadastrado ou ocorreu um erro.")
             else:

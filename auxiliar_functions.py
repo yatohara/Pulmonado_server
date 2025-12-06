@@ -314,8 +314,6 @@ def calculate_spirometry_metrics(exam_id, sample_rate_ms=10):
     flow_data = np.array(raw_readings[:, 1]).astype(float)
     time_step = sample_rate_ms / 1000.0  # Tempo entre amostras em segundos
 
-    print(time_data)
-
     # PEF (Peak Expiratory Flow): Fluxo Máximo
     pef = np.max(flow_data)
 

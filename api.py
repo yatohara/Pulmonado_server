@@ -107,7 +107,6 @@ def esp_sync(patient_id):
     state = SESSION_STATE.get(patient_id_str,
                               {'exam_id': 0, 'load': 0.0, 'status': 'AGUARDANDO', 'blocks_received': 0})
 
-    # DEBUG CRÍTICO: Print what is being returned to the ESP32
     print(f"DEBUG: ESP32 requested sync. Returning: {state}")
 
     return jsonify(state), 200
